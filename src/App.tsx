@@ -36,646 +36,25 @@ import {
 } from '@phosphor-icons/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db, initDbMigration, type Note, type SyncQueueItem, SHOWCASE_SEEDS } from './db';
+import { syncEngine } from './services/syncEngine';
+import { processNoteWithAI, type AIAction } from './services/aiService';
+import { SyncMarkLogo } from './components/SyncMarkLogo';
+import { MarkdownRenderer } from './components/MarkdownRenderer';
+import { Hero3DCanvas } from './components/Hero3DCanvas';
+import { TaglineReveal } from './components/TaglineReveal';
+import { InteractiveHeroPreview } from './components/InteractiveHeroPreview';
+import { MobileNavDrawer } from './components/MobileNavDrawer';
 
-export interface Note {
-  id: string;
-  title: string;
-  content: string;
-  tags: string[];
-  updatedAt: number;
-  syncStatus: 'synced' | 'pending' | 'conflict';
-  deleted?: boolean;
-}
-
-export interface SyncQueueItem {
-  queueId?: number;
-  noteId: string;
-  action: 'UPSERT' | 'DELETE';
-  payload: Note;
-  createdAt: number;
-}
-
-export type AIAction = 'summarize' | 'actionItems' | 'polish' | 'expand';
 export type ViewRoute = 'home' | 'features' | 'benchmarks' | 'docs' | 'privacy' | 'terms' | '404';
 export type StudioTab = 'editor' | 'telemetry' | 'playground' | 'settings';
 
-const SHOWCASE_SEEDS: Note[] = [
-  {
-    id: 'seed-architecture-spec',
-    title: 'SyncMark Distributed Architecture Spec',
-    tags: ['Architecture', 'PWA', 'Distributed Systems'],
-    updatedAt: Date.now() - 1000 * 60 * 30,
-    syncStatus: 'synced',
-    deleted: false,
-    content: `# SyncMark Architecture Specification
 
-SyncMark is an offline capable progressive web application utilizing a local first reactive storage layer combined with a background synchronization engine.
 
-### Core Highlights
-- Zero latency writes: All mutations commit directly to browser IndexedDB in under 3ms.
-- Resilient sync engine: Network partitions push modifications to a FIFO queue buffer.
-- Conflict settlement: Automatic last write wins deterministic timestamp resolution.
-- Model acceleration: Client context orchestration using Google GenAI models.
 
----
 
-### Synchronization Pipeline
-- [x] Client commits to non blocking local storage
-- [x] Background worker registers network lifecycle
-- [ ] Multi region WebSocket reconciliation
-- [x] Deterministic timestamp resolution without remote locks`
-  },
-  {
-    id: 'seed-sprint-checklist',
-    title: 'Engineering Sprint Checklist',
-    tags: ['Sprint', 'Tasks', 'Deliverables'],
-    updatedAt: Date.now() - 1000 * 60 * 120,
-    syncStatus: 'synced',
-    deleted: false,
-    content: `# Engineering Sprint Tasks
 
-Track primary engineering deliverables. Use the Copilot action items button to parse tasks into markdown format.
-
-- [x] Configure IndexedDB schemas for notes and syncQueue
-- [x] Implement Workbox Service Worker caching strategies
-- [ ] Add bi directional WebSocket syncing for collaborative workflows
-- [ ] Implement CRDT delta reconciliation for character level edits
-- [x] Integrate Gemini copilot for document summarization
-- [ ] Benchmark Lighthouse PWA metrics on throttled networks`
-  },
-  {
-    id: 'seed-frontend-guide',
-    title: 'Frontend Performance Optimization Guide',
-    tags: ['Frontend', 'Performance', 'React 19'],
-    updatedAt: Date.now() - 1000 * 60 * 360,
-    syncStatus: 'synced',
-    deleted: false,
-    content: `# Frontend Optimization Guide
-
-### Core Web Vitals Targets
-- Largest Contentful Paint: under 2.5s
-- Interaction to Next Paint: under 200ms
-- Cumulative Layout Shift: under 0.1
-
-### Key Engineering Decisions
-- [x] Hardware accelerated backdrops without blur penalties
-- [x] Responsive vector SVG logo integration
-- [x] Progressive web app offline caching with Workbox runtime interceptors`
-  }
-];
-
-function SyncMarkLogo({ size = 28 }: { size?: number }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 32 32"
-      fill="none"
-      style={{ width: size, height: size }}
-      className="shrink-0"
-    >
-      <rect width="32" height="32" rx="8" fill="#000000" />
-      <rect x="0.75" y="0.75" width="30.5" height="30.5" rx="7.25" stroke="#272727" strokeWidth="1.5" />
-      <path
-        d="M21 9H12.5C10.567 9 9 10.567 9 12.5C9 14.433 10.567 16 12.5 16H19.5C21.433 16 23 17.567 23 19.5C23 21.433 21.433 23 19.5 23H11"
-        stroke="#6366F1"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-      <circle cx="21.5" cy="9" r="2" fill="#06B6D4" />
-      <circle cx="10.5" cy="23" r="2" fill="#06B6D4" />
-    </svg>
-  );
-}
-
-async function callAICopilot(text: string, action: AIAction): Promise<string> {
-  let apiKey = '';
-  try {
-    const envLookup = new Function('key', 'try { return import.meta.env[key]; } catch { return ""; }');
-    apiKey = envLookup('VITE_GEMINI_API_KEY') || '';
-  } catch {
-    apiKey = '';
-  }
-
-  const prompts: Record<AIAction, string> = {
-    summarize: 'Generate a structured 2 to 3 sentence executive summary of these notes with key takeaways:\n\n',
-    actionItems: 'Extract all tasks and action items from this text into a clean Markdown checklist format (`- [ ] task`):\n\n',
-    polish: 'Refine and polish the tone, grammar, and technical vocabulary of this text while preserving exact meaning:\n\n',
-    expand: 'Expand on the technical concepts described in this document, detailing edge cases, architectural patterns, and next steps:\n\n'
-  };
-
-  const fullPrompt = `${prompts[action]}${text}`;
-
-  if (apiKey && navigator.onLine) {
-    const candidateModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-    for (const model of candidateModels) {
-      try {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: [{ text: fullPrompt }] }] })
-        });
-        const data = await res.json();
-        if (res.ok && data.candidates?.[0]?.content?.parts?.[0]?.text) {
-          return data.candidates[0].content.parts[0].text;
-        }
-      } catch (err) {
-        console.warn(`[Copilot] Model ${model} request failed, continuing fallback...`, err);
-      }
-    }
-  }
-
-  // Deterministic local client fallback for offline or unauthenticated usage
-  await new Promise((r) => setTimeout(r, 400));
-  if (action === 'summarize') {
-    return `### Executive summary\n\n• Core focus: Local first architecture providing instant writes to IndexedDB with zero latency.\n• Consistency: Background FIFO queue guarantees deterministic last write wins reconciliation.\n• Resilience: Complete offline execution with service worker runtime interception.`;
-  }
-  if (action === 'actionItems') {
-    return `### Extracted action items\n\n- [ ] Verify IndexedDB transaction atomicity under memory pressure\n- [ ] Test offline FIFO queue serialization during network loss\n- [ ] Validate last write wins timestamp settlement across tabs\n- [ ] Audit Workbox cache storage quotas on mobile viewports`;
-  }
-  if (action === 'polish') {
-    return `### Polished technical formulation\n\n${text
-      .replace(/we need to/gi, 'The engineering objective requires')
-      .replace(/fix the/gi, 'reconcile critical')
-      .replace(/deploy the site/gi, 'orchestrate continuous deployment for the production bundle')}`;
-  }
-  return `### Technical expansion\n\n1. Storage tier: Local mutations commit to IndexedDB in 2.4ms with zero blocking.\n2. Monotonic clocks: Sequential millisecond timestamps guarantee deterministic ordering.\n3. Runtime footprint: Lightweight client memory usage under 8MB heap allocations.`;
-}
-
-function SimpleMarkdownRenderer({ content }: { content: string }) {
-  if (!content) {
-    return <span className="caption-4 text-[var(--text-subtle)]">No content to preview...</span>;
-  }
-
-  const lines = content.split('\n');
-
-  return (
-    <div className="space-y-2 font-sans text-xs text-[var(--text-secondary)] leading-relaxed">
-      {lines.map((line, idx) => {
-        const trimmed = line.trim();
-
-        if (trimmed.startsWith('# ')) {
-          return (
-            <div key={idx} className="pb-1 mt-3 mb-1 border-b border-[var(--border-primary)]">
-              <h1 className="heading-6 text-[var(--text-primary)]">
-                {trimmed.slice(2)}
-              </h1>
-            </div>
-          );
-        }
-        if (trimmed.startsWith('## ')) {
-          return (
-            <div key={idx} className="pb-1 mt-2.5 mb-1 border-b border-[var(--border-primary)]">
-              <h2 className="title-2 text-[var(--text-primary)]">
-                {trimmed.slice(3)}
-              </h2>
-            </div>
-          );
-        }
-        if (trimmed.startsWith('### ')) {
-          return (
-            <h3 key={idx} className="title-3 text-[var(--text-info)] mt-2 mb-1">
-              {trimmed.slice(4)}
-            </h3>
-          );
-        }
-        if (trimmed.startsWith('- [x] ') || trimmed.startsWith('- [X] ')) {
-          return (
-            <div key={idx} className="flex items-center gap-2 text-xs font-mono py-0.5 text-[var(--text-success)]">
-              <CheckCircle className="w-3.5 h-3.5 shrink-0" />
-              <span className="line-through text-[var(--text-subtle)]">{trimmed.slice(6)}</span>
-            </div>
-          );
-        }
-        if (trimmed.startsWith('- [ ] ')) {
-          return (
-            <div key={idx} className="flex items-center gap-2 text-xs font-mono py-0.5 text-[var(--text-primary)]">
-              <div className="w-3.5 h-3.5 rounded border border-[var(--border-primary)] shrink-0 bg-[var(--surface-primary-subtle)]" />
-              <span>{trimmed.slice(6)}</span>
-            </div>
-          );
-        }
-        if (trimmed.startsWith('- ') || trimmed.startsWith('• ') || trimmed.startsWith('* ')) {
-          return (
-            <div key={idx} className="flex items-start gap-2 text-xs text-[var(--text-secondary)] py-0.5 pl-2">
-              <span className="text-[var(--text-info)]">•</span>
-              <span>{trimmed.slice(2)}</span>
-            </div>
-          );
-        }
-        if (trimmed.startsWith('```')) {
-          return (
-            <div key={idx} className="bg-[var(--surface-primary-subtle)] p-2 rounded-lg text-xs font-mono text-[var(--text-info)] border border-[var(--border-primary)] overflow-x-auto">
-              {trimmed}
-            </div>
-          );
-        }
-        if (trimmed.startsWith('---')) {
-          return <div key={idx} className="w-full h-px bg-[var(--border-primary)] my-3" />;
-        }
-        if (!trimmed) {
-          return <div key={idx} className="h-1.5" />;
-        }
-
-        return (
-          <p key={idx} className="text-xs text-[var(--text-secondary)] leading-relaxed">
-            {trimmed}
-          </p>
-        );
-      })}
-    </div>
-  );
-}
-
-export function Hero3DCanvas() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    let animationFrameId: number;
-    let width = window.innerWidth;
-    let height = window.innerHeight;
-
-    const resize = () => {
-      if (!canvas) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      width = window.innerWidth;
-      height = window.innerHeight;
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.scale(dpr, dpr);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-
-    const mouse = {
-      x: width / 2,
-      y: height / 2,
-      targetX: width / 2,
-      targetY: height / 2,
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
-      mouse.targetX = e.clientX;
-      mouse.targetY = e.clientY;
-    };
-
-    const handleTouchMove = (e: TouchEvent) => {
-      if (e.touches && e.touches[0]) {
-        mouse.targetX = e.touches[0].clientX;
-        mouse.targetY = e.touches[0].clientY;
-      }
-    };
-
-    window.addEventListener('mousemove', handleMouseMove, { passive: true });
-    window.addEventListener('touchmove', handleTouchMove, { passive: true });
-
-    let time = 0;
-
-    const render = () => {
-      time += 0.015;
-
-      mouse.x += (mouse.targetX - mouse.x) * 0.04;
-      mouse.y += (mouse.targetY - mouse.y) * 0.04;
-
-      const isMobile = width < 768;
-      const cols = isMobile ? 16 : 28;
-      const rows = isMobile ? 12 : 18;
-      const spacing = isMobile ? 48 : 44;
-
-      ctx.clearRect(0, 0, width, height);
-
-      // Subtle ambient pointer lighting in Indigo and Cyan tones
-      const radGrad = ctx.createRadialGradient(
-        mouse.x,
-        mouse.y,
-        20,
-        mouse.x,
-        mouse.y,
-        isMobile ? width * 0.6 : width * 0.45
-      );
-      radGrad.addColorStop(0, 'rgba(99, 102, 241, 0.22)');
-      radGrad.addColorStop(0.4, 'rgba(6, 182, 212, 0.09)');
-      radGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-      ctx.fillStyle = radGrad;
-      ctx.fillRect(0, 0, width, height);
-
-      const mouseNormX = (mouse.x - width / 2) / (width / 2);
-      const mouseNormY = (mouse.y - height / 2) / (height / 2);
-
-      const focalLength = 320;
-      const cameraY = -100 + mouseNormY * 40;
-      const cameraAngleX = 0.58 + mouseNormY * 0.1;
-      const cameraAngleY = mouseNormX * 0.18;
-
-      const cosX = Math.cos(cameraAngleX);
-      const sinX = Math.sin(cameraAngleX);
-      const cosY = Math.cos(cameraAngleY);
-      const sinY = Math.sin(cameraAngleY);
-
-      const project = (x: number, y: number, z: number) => {
-        const rx = x * cosY - z * sinY;
-        const rz = z * cosY + x * sinY;
-        const ry = (y - cameraY) * cosX - rz * sinX;
-        const finalZ = rz * cosX + (y - cameraY) * sinX;
-
-        const scale = focalLength / (focalLength + finalZ + 260);
-        return {
-          px: rx * scale + width / 2,
-          py: ry * scale + height * 0.55,
-          scale,
-          visible: scale > 0 && finalZ + 260 > 0,
-        };
-      };
-
-      const gridPoints: Array<Array<{ px: number; py: number; scale: number; visible: boolean }>> = [];
-
-      for (let r = 0; r < rows; r++) {
-        const rowArr = [];
-        for (let c = 0; c < cols; c++) {
-          const worldX = (c - cols / 2) * spacing;
-          const worldZ = r * spacing;
-
-          const distToMouse = Math.hypot(worldX - mouseNormX * 200, worldZ - (r * spacing * 0.4));
-          const ripple = Math.sin(distToMouse * 0.035 - time * 1.8) * 18;
-          const wave = Math.sin(c * 0.3 + time * 1.2) * 20 + Math.cos(r * 0.35 + time * 0.8) * 18;
-          const elevation = wave + ripple;
-
-          const proj = project(worldX, elevation, worldZ);
-          rowArr.push(proj);
-        }
-        gridPoints.push(rowArr);
-      }
-
-      ctx.lineWidth = 1;
-
-      // Crisp Cyan horizontal grid lines
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols - 1; c++) {
-          const p1 = gridPoints[r][c];
-          const p2 = gridPoints[r][c + 1];
-
-          if (p1.visible && p2.visible) {
-            const alpha = Math.max(0, (1 - r / rows) * 0.38 * Math.min(p1.scale, p2.scale));
-            ctx.strokeStyle = `rgba(56, 189, 248, ${alpha})`;
-            ctx.beginPath();
-            ctx.moveTo(p1.px, p1.py);
-            ctx.lineTo(p2.px, p2.py);
-            ctx.stroke();
-          }
-        }
-      }
-
-      // Crisp Indigo vertical grid lines
-      for (let c = 0; c < cols; c++) {
-        for (let r = 0; r < rows - 1; r++) {
-          const p1 = gridPoints[r][c];
-          const p2 = gridPoints[r + 1][c];
-
-          if (p1.visible && p2.visible) {
-            const alpha = Math.max(0, (1 - r / rows) * 0.38 * Math.min(p1.scale, p2.scale));
-            ctx.strokeStyle = `rgba(129, 140, 248, ${alpha})`;
-            ctx.beginPath();
-            ctx.moveTo(p1.px, p1.py);
-            ctx.lineTo(p2.px, p2.py);
-            ctx.stroke();
-          }
-        }
-      }
-
-      animationFrameId = requestAnimationFrame(render);
-    };
-
-    render();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('touchmove', handleTouchMove);
-      cancelAnimationFrame(animationFrameId);
-    };
-  }, []);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      className="pointer-events-none fixed inset-0 z-0 h-[100dvh] w-screen opacity-85"
-    />
-  );
-}
-
-function TaglineReveal() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [scrollProgress, setScrollProgress] = useState(0);
-  const [reducedMotion, setReducedMotion] = useState(false);
-
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    setReducedMotion(mq.matches);
-    const handler = (e: MediaQueryListEvent) => setReducedMotion(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-
-  useEffect(() => {
-    if (reducedMotion) return;
-
-    let rafId: number;
-    const handleScroll = () => {
-      if (!containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const windowHeight = window.innerHeight;
-      const start = windowHeight * 0.85;
-      const end = windowHeight * 0.35;
-      const progress = Math.min(Math.max((start - rect.top) / (start - end), 0), 1);
-      setScrollProgress(progress);
-    };
-
-    const onScroll = () => {
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(handleScroll);
-    };
-
-    window.addEventListener('scroll', onScroll, { passive: true });
-    handleScroll();
-
-    return () => {
-      window.removeEventListener('scroll', onScroll);
-      cancelAnimationFrame(rafId);
-    };
-  }, [reducedMotion]);
-
-  const statement =
-    "Every keystroke commits locally before touching the network. We believe developer tools must work reliably without asking for cloud permission.";
-  const words = statement.split(' ');
-
-  return (
-    <section className="w-full py-16 md:py-24 px-4 md:px-8 flex justify-center">
-      <div ref={containerRef} className="max-w-[680px] mx-auto text-center">
-        <p className="heading-5 md:heading-4 font-semibold leading-relaxed [text-wrap:balance]">
-          {words.map((word, idx) => {
-            if (reducedMotion) {
-              return (
-                <span key={idx} className="text-[var(--text-primary)] inline-block mr-2">
-                  {word}
-                </span>
-              );
-            }
-            const threshold = idx / words.length;
-            const wordProgress = Math.min(Math.max((scrollProgress - threshold) / (1 / words.length), 0), 1);
-            const ease = 1 - Math.pow(1 - wordProgress, 3);
-            const opacity = 0.3 + 0.7 * ease;
-
-            return (
-              <span
-                key={idx}
-                style={{
-                  opacity,
-                  transition: 'opacity 0.2s cubic-bezier(0.22, 1, 0.36, 1)'
-                }}
-                className="text-[var(--text-primary)] inline-block mr-2"
-              >
-                {word}
-              </span>
-            );
-          })}
-        </p>
-      </div>
-    </section>
-  );
-}
-
-function InteractiveHeroPreview({ onLaunchApp }: { onLaunchApp: () => void }) {
-  const [demoText, setDemoText] = useState(
-    "# Engineering notes\n\n- [x] Configure IndexedDB reactive layer\n- [ ] Benchmark local storage latency\n- [ ] Serialize offline mutation queue\n\nAll mutations commit locally in 2.4ms with zero blocking."
-  );
-
-  return (
-    <div className="w-full max-w-4xl mx-auto mt-8 md:mt-12 text-left">
-      <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] hover:border-[var(--border-action-primary)] transition-colors duration-300 p-4 md:p-6 shadow-2xl">
-        <div className="flex items-center justify-between pb-4 mb-4 border-b border-[var(--border-primary)]">
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-[var(--border-primary)]" />
-            <span className="w-2.5 h-2.5 rounded-full bg-[var(--border-primary)]" />
-            <span className="w-2.5 h-2.5 rounded-full bg-[var(--border-primary)]" />
-            <span className="caption-3 font-mono ml-2 text-[var(--text-tertiary)]">interactive workspace preview</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="caption-3 font-mono text-[var(--text-success)] font-semibold">2.4ms client write latency</span>
-            <button
-              onClick={onLaunchApp}
-              className="caption-1 py-1 px-2.5 rounded-lg bg-[var(--surface-primary-subtle)] text-[var(--text-primary)] border border-[var(--border-primary)] hover:border-[var(--border-action-primary)] hover:text-[var(--text-info)] active:scale-[0.98] transition-colors flex items-center gap-1 cursor-pointer"
-            >
-              Expand to studio <ArrowUpRight className="w-3.5 h-3.5 text-[var(--surface-accent)]" />
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="flex flex-col">
-            <label className="caption-4 mb-1 font-mono text-[var(--text-subtle)]">Raw markdown editor</label>
-            <textarea
-              value={demoText}
-              onChange={(e) => setDemoText(e.target.value)}
-              className="w-full h-44 md:h-52 bg-[var(--surface-base)] border border-[var(--border-primary)] rounded-lg p-3 text-xs font-mono text-[var(--text-primary)] leading-relaxed resize-none focus:outline-none focus:border-[var(--border-action-primary)] custom-scroll"
-              placeholder="Type markdown here..."
-            />
-          </div>
-
-          <div className="flex flex-col">
-            <label className="caption-4 mb-1 font-mono text-[var(--text-subtle)]">Live rendered preview</label>
-            <div className="w-full h-44 md:h-52 bg-[var(--surface-primary-subtle)] border border-[var(--border-primary)] rounded-lg p-3 text-xs text-[var(--text-primary)] leading-relaxed overflow-y-auto custom-scroll">
-              <SimpleMarkdownRenderer content={demoText} />
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MobileNavDrawer({
-  isOpen,
-  onClose,
-  activePage,
-  onSelectPage,
-  onLaunchApp,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  activePage: string;
-  onSelectPage: (page: ViewRoute) => void;
-  onLaunchApp: () => void;
-}) {
-  if (!isOpen) return null;
-
-  const links: Array<{ id: ViewRoute; label: string }> = [
-    { id: 'home', label: 'Overview' },
-    { id: 'features', label: 'Architecture' },
-    { id: 'benchmarks', label: 'Stress lab' },
-    { id: 'docs', label: 'Docs' },
-  ];
-
-  return (
-    <div className="fixed inset-0 z-40 bg-[var(--surface-primary)]/95 backdrop-blur-xl h-[100dvh] flex flex-col p-6 pt-24 md:hidden">
-      <nav className="flex flex-col gap-2">
-        {links.map((link, idx) => {
-          const isActive = activePage === link.id;
-          return (
-            <motion.button
-              key={link.id}
-              initial={{ opacity: 0, y: 24 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{
-                duration: 0.3,
-                delay: idx * 0.06,
-                ease: [0.22, 1, 0.36, 1],
-              }}
-              onClick={() => {
-                onSelectPage(link.id);
-                onClose();
-              }}
-              className={`text-left title-1 py-3 px-4 rounded-xl border transition cursor-pointer ${
-                isActive
-                  ? 'bg-[var(--action-primary)] border-[var(--border-action-primary)] text-[var(--core-gray-00)] font-semibold'
-                  : 'bg-transparent border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-primary)]'
-              }`}
-            >
-              {link.label}
-            </motion.button>
-          );
-        })}
-      </nav>
-
-      <motion.div
-        initial={{ opacity: 0, y: 24 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{
-          duration: 0.3,
-          delay: links.length * 0.06,
-          ease: [0.22, 1, 0.36, 1],
-        }}
-        className="mt-8 pt-8 border-t border-[var(--border-primary)]"
-      >
-        <button
-          onClick={() => {
-            onLaunchApp();
-            onClose();
-          }}
-          className="w-full py-2 px-3 rounded-xl bg-[var(--action-primary)] text-[var(--core-gray-00)] button-md font-semibold hover:bg-[var(--action-primary-hover)] active:scale-[0.98] transition flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
-        >
-          Open studio app <ArrowUpRight className="w-4 h-4 text-[var(--core-accent-200)]" />
-        </button>
-      </motion.div>
-    </div>
-  );
-}
 
 export default function App() {
   const [mainMode, setMainMode] = useState<'landing' | 'app'>('landing');
@@ -684,29 +63,24 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(0);
 
-  // Benchmarks simulation state
+  // Benchmarks & metrics state
   const [benchRunning, setBenchRunning] = useState(false);
   const [benchProgress, setBenchProgress] = useState(0);
-  const [benchOpsPerSec, setBenchOpsPerSec] = useState(24500);
+  const [benchOpsPerSec, setBenchOpsPerSec] = useState<number | null>(null);
+  const [measuredWriteMs, setMeasuredWriteMs] = useState<number | null>(() => syncEngine.medianWriteMs());
 
-  // Storage and document states
-  const [notes, setNotes] = useState<Note[]>(() => {
-    try {
-      const saved = localStorage.getItem('syncmark_notes');
-      return saved ? JSON.parse(saved) : SHOWCASE_SEEDS;
-    } catch {
-      return SHOWCASE_SEEDS;
-    }
-  });
+  // Dexie live queries (replaces localStorage)
+  const rawNotes = useLiveQuery(
+    () => db.notes.orderBy('updatedAt').reverse().filter((n) => !n.deleted).toArray(),
+    []
+  );
+  const notes = rawNotes ?? [];
 
-  const [queue, setQueue] = useState<SyncQueueItem[]>(() => {
-    try {
-      const saved = localStorage.getItem('syncmark_queue');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const rawQueue = useLiveQuery(
+    () => db.syncQueue.orderBy('createdAt').toArray(),
+    []
+  );
+  const queue = rawQueue ?? [];
 
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -720,26 +94,21 @@ export default function App() {
   const [aiResultModal, setAiResultModal] = useState<{ title: string; body: string } | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
 
+  // One-time database migration from localStorage / seed documents
   useEffect(() => {
-    try {
-      localStorage.setItem('syncmark_notes', JSON.stringify(notes));
-    } catch (err) {
-      console.warn('Storage persistence warning:', err);
-    }
-  }, [notes]);
+    initDbMigration();
+  }, []);
 
+  // Subscribe to sync engine syncing state
   useEffect(() => {
-    try {
-      localStorage.setItem('syncmark_queue', JSON.stringify(queue));
-    } catch (err) {
-      console.warn('Queue persistence warning:', err);
-    }
-  }, [queue]);
+    return syncEngine.subscribe(setIsSyncing);
+  }, []);
 
+  // Online / offline lifecycle
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      triggerSyncQueue();
+      syncEngine.sync();
     };
     const handleOffline = () => setIsOnline(false);
 
@@ -753,106 +122,95 @@ export default function App() {
   }, []);
 
   const activeNote = useMemo(() => notes.find((n) => n.id === selectedNoteId), [notes, selectedNoteId]);
+  const activeNoteId = activeNote?.id;
+  const currentSelectedIdRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Synchronize title/content into editor only when switching active notes (prevents cursor jump)
   useEffect(() => {
-    if (activeNote) {
+    if (activeNote && activeNote.id !== currentSelectedIdRef.current) {
+      currentSelectedIdRef.current = activeNote.id;
       setTitle(activeNote.title);
       setContent(activeNote.content);
     } else if (notes.length > 0 && !selectedNoteId) {
       setSelectedNoteId(notes[0].id);
     }
-  }, [selectedNoteId, activeNote, notes]);
+  }, [selectedNoteId, activeNoteId, notes.length]);
 
-  const triggerSyncQueue = async () => {
-    if (!navigator.onLine || isSyncing) return;
-    setIsSyncing(true);
-
-    await new Promise((r) => setTimeout(r, 400));
-
-    setNotes((prevNotes) =>
-      prevNotes.map((note) => (note.syncStatus === 'pending' ? { ...note, syncStatus: 'synced' } : note))
-    );
-    setQueue([]);
-    setIsSyncing(false);
-  };
-
-  const handleCreateNew = () => {
-    const newNote: Note = {
-      id: crypto.randomUUID(),
-      title: 'Untitled document',
-      content: '# New note\n\nStart writing in zero latency local markdown...',
-      tags: ['General'],
-      updatedAt: Date.now(),
-      syncStatus: isOnline ? 'synced' : 'pending',
-      deleted: false
+  // Clean up debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
+  }, []);
 
-    setNotes([newNote, ...notes]);
-    setSelectedNoteId(newNote.id);
-    if (!isOnline) {
-      setQueue((prev) => [...prev, { noteId: newNote.id, action: 'UPSERT', payload: newNote, createdAt: Date.now() }]);
-    }
-    setMainMode('app');
-    setStudioTab('editor');
-  };
-
+  // Debounced auto-save directly to Dexie + SyncQueue (250ms)
   const handleAutoSave = (newTitle: string, newContent: string) => {
     setTitle(newTitle);
     setContent(newContent);
 
-    setNotes((prevNotes) =>
-      prevNotes.map((n) => {
-        if (n.id === selectedNoteId) {
-          return {
-            ...n,
-            title: newTitle || 'Untitled document',
-            content: newContent,
-            updatedAt: Date.now(),
-            syncStatus: isOnline ? 'synced' : 'pending'
-          };
-        }
-        return n;
-      })
-    );
+    if (!activeNote) return;
 
-    if (!isOnline && activeNote) {
-      setQueue((prev) => [
-        ...prev,
-        {
-          noteId: selectedNoteId,
-          action: 'UPSERT',
-          payload: { ...activeNote, title: newTitle, content: newContent, updatedAt: Date.now() },
-          createdAt: Date.now()
-        }
-      ]);
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
     }
+
+    saveTimerRef.current = setTimeout(async () => {
+      await syncEngine.saveNoteLocally({
+        ...activeNote,
+        title: newTitle || 'Untitled document',
+        content: newContent,
+      });
+      setMeasuredWriteMs(syncEngine.medianWriteMs());
+    }, 250);
   };
 
-  const handleDeleteNote = (noteId: string) => {
-    setNotes((prev) => prev.filter((n) => n.id !== noteId));
+  const handleCreateNew = async () => {
+    const newNote = await syncEngine.createNote();
+    currentSelectedIdRef.current = newNote.id;
+    setSelectedNoteId(newNote.id);
+    setTitle(newNote.title);
+    setContent(newNote.content);
+    setMainMode('app');
+    setStudioTab('editor');
+    setMeasuredWriteMs(syncEngine.medianWriteMs());
+  };
+
+  const handleDeleteNote = async (noteId: string) => {
+    await syncEngine.deleteNoteLocally(noteId);
+    setMeasuredWriteMs(syncEngine.medianWriteMs());
     if (selectedNoteId === noteId) {
       const remaining = notes.filter((n) => n.id !== noteId);
       if (remaining.length > 0) {
         setSelectedNoteId(remaining[0].id);
+        currentSelectedIdRef.current = remaining[0].id;
+        setTitle(remaining[0].title);
+        setContent(remaining[0].content);
       } else {
         setSelectedNoteId('');
+        currentSelectedIdRef.current = null;
         setTitle('');
         setContent('');
       }
     }
   };
 
-  const handleDuplicateNote = () => {
+  const handleDuplicateNote = async () => {
     if (!activeNote) return;
-    const duplicated: Note = {
+    const duplicated = await syncEngine.duplicateNote({
       ...activeNote,
-      id: crypto.randomUUID(),
-      title: `${activeNote.title} Copy`,
-      updatedAt: Date.now(),
-      syncStatus: isOnline ? 'synced' : 'pending'
-    };
-    setNotes([duplicated, ...notes]);
+      title,
+      content,
+    });
+    currentSelectedIdRef.current = duplicated.id;
     setSelectedNoteId(duplicated.id);
+    setTitle(duplicated.title);
+    setContent(duplicated.content);
+    setMeasuredWriteMs(syncEngine.medianWriteMs());
+  };
+
+  const triggerSyncQueue = () => {
+    syncEngine.sync();
   };
 
   const handleDownloadMarkdown = () => {
@@ -873,7 +231,7 @@ export default function App() {
     }
     setIsAiProcessing(true);
     try {
-      const result = await callAICopilot(content, action);
+      const result = await processNoteWithAI(content, action);
       const labels: Record<AIAction, string> = {
         summarize: 'Executive summary',
         actionItems: 'Actionable tasks',
@@ -912,23 +270,22 @@ export default function App() {
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
   const readingTime = Math.ceil(wordCount / 200);
 
-  // Stress lab simulation runner
-  const runStressTest = () => {
+  // Real Dexie stress lab benchmark runner
+  const runStressTest = async () => {
     if (benchRunning) return;
     setBenchRunning(true);
     setBenchProgress(0);
-
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += 10;
-      setBenchProgress(progress);
-      setBenchOpsPerSec((prev) => prev + Math.floor(Math.random() * 800 - 350));
-
-      if (progress >= 100) {
-        clearInterval(interval);
-        setBenchRunning(false);
-      }
-    }, 180);
+    try {
+      const result = await syncEngine.runRealBenchmark(200, (p) => {
+        setBenchProgress(p);
+      });
+      setBenchOpsPerSec(result.opsPerSec);
+      setMeasuredWriteMs(syncEngine.medianWriteMs());
+    } catch (err) {
+      console.error('Benchmark execution error:', err);
+    } finally {
+      setBenchRunning(false);
+    }
   };
 
   // ==========================================
@@ -1073,7 +430,7 @@ export default function App() {
                   {/* Concrete Proof Metric Badge */}
                   <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--surface-primary)] border border-[var(--border-primary)] text-[var(--text-info)] font-mono text-xs mb-6">
                     <span className="w-2 h-2 rounded-full bg-[var(--surface-success)] animate-pulse" />
-                    <span>2.4ms client write latency</span>
+                    <span>{measuredWriteMs !== null ? `${measuredWriteMs.toFixed(1)}ms measured write latency` : 'Zero latency local write'}</span>
                   </div>
 
                   {/* Heading with left to right text gradient */}
@@ -1105,6 +462,7 @@ export default function App() {
                       setMainMode('app');
                       setStudioTab('editor');
                     }}
+                    measuredLatency={measuredWriteMs !== null ? `${measuredWriteMs.toFixed(1)}ms` : '—'}
                   />
                 </section>
 
@@ -1126,7 +484,7 @@ export default function App() {
                       </div>
                       <h3 className="title-2 text-[var(--text-primary)]">Instant disk transactions</h3>
                       <p className="body-5 text-[var(--text-tertiary)]">
-                        Writes commit in 2.4ms directly to browser IndexedDB without waiting for round trip network confirmations.
+                        Writes commit directly to browser IndexedDB without waiting for round trip network confirmations.
                       </p>
                     </div>
 
@@ -1184,7 +542,7 @@ export default function App() {
                       </div>
                       <h3 className="title-1 text-[var(--text-primary)]">Local transactional write</h3>
                       <p className="body-5 text-[var(--text-tertiary)]">
-                        Keystrokes commit atomically to browser IndexedDB in under 3ms with synchronous reactive state updates.
+                        Keystrokes commit atomically to browser IndexedDB with synchronous reactive state updates.
                       </p>
                     </div>
 
@@ -1195,7 +553,7 @@ export default function App() {
                       </div>
                       <h3 className="title-1 text-[var(--text-primary)]">Offline FIFO queue buffering</h3>
                       <p className="body-5 text-[var(--text-tertiary)]">
-                        Network dropouts redirect mutations into an append only persistent queue with cryptographic record checksums.
+                        Network dropouts redirect mutations into a persistent FIFO IndexedDB queue with deduplicated keys.
                       </p>
                     </div>
 
@@ -1237,8 +595,10 @@ export default function App() {
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="rounded-xl bg-[var(--surface-base)] border border-[var(--border-primary)] p-4 text-center">
-                        <div className="font-mono text-2xl md:text-3xl font-semibold text-[var(--text-success)] mb-1">2.4ms</div>
-                        <div className="caption-4 text-[var(--text-tertiary)]">Median client write latency</div>
+                        <div className="font-mono text-2xl md:text-3xl font-semibold text-[var(--text-success)] mb-1">
+                          {measuredWriteMs !== null ? `${measuredWriteMs.toFixed(1)}ms` : '—'}
+                        </div>
+                        <div className="caption-4 text-[var(--text-tertiary)]">Measured client write latency</div>
                       </div>
 
                       <div className="rounded-xl bg-[var(--surface-base)] border border-[var(--border-primary)] p-4 text-center">
@@ -1442,29 +802,31 @@ function reconcileRecord(localRecord, remoteRecord) {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] p-6 space-y-2">
                     <div className="caption-4 text-[var(--text-tertiary)]">SyncMark IndexedDB</div>
-                    <div className="font-mono text-3xl font-semibold text-[var(--text-success)]">2.4ms</div>
-                    <div className="caption-5 text-[var(--text-subtle)]">Non blocking local write</div>
+                    <div className="font-mono text-3xl font-semibold text-[var(--text-success)]">
+                      {measuredWriteMs !== null ? `${measuredWriteMs.toFixed(1)}ms` : '—'}
+                    </div>
+                    <div className="caption-5 text-[var(--text-subtle)]">Measured non blocking write</div>
                   </div>
 
                   <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] p-6 space-y-2">
                     <div className="caption-4 text-[var(--text-tertiary)]">Standard Cloud REST API</div>
-                    <div className="font-mono text-3xl font-semibold text-[var(--text-warning)]">142ms</div>
-                    <div className="caption-5 text-[var(--text-subtle)]">Network round trip latency</div>
+                    <div className="font-mono text-3xl font-semibold text-[var(--text-warning)]">~100–200ms+</div>
+                    <div className="caption-5 text-[var(--text-subtle)]">Network round trip latency (typical)</div>
                   </div>
 
                   <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] p-6 space-y-2">
                     <div className="caption-4 text-[var(--text-tertiary)]">Cloud GraphQL Endpoint</div>
-                    <div className="font-mono text-3xl font-semibold text-[var(--core-red-400)]">218ms</div>
-                    <div className="caption-5 text-[var(--text-subtle)]">Server processing latency</div>
+                    <div className="font-mono text-3xl font-semibold text-[var(--core-red-400)]">~150–300ms+</div>
+                    <div className="caption-5 text-[var(--text-subtle)]">Server processing latency (typical)</div>
                   </div>
                 </div>
 
                 <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] p-6 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
-                      <h2 className="title-1 text-[var(--text-primary)]">Simulated write throughput test</h2>
+                      <h2 className="title-1 text-[var(--text-primary)]">Real Dexie write throughput benchmark</h2>
                       <p className="body-5 text-[var(--text-tertiary)]">
-                        Dispatches synthetic batch records to evaluate browser memory stability.
+                        Executes real IndexedDB transactions with automatic cleanup to evaluate browser disk write throughput.
                       </p>
                     </div>
 
@@ -1490,7 +852,7 @@ function reconcileRecord(localRecord, remoteRecord) {
                         />
                       </div>
                       <div className="caption-3 font-mono text-[var(--text-success)] font-semibold">
-                        Observed throughput: {benchOpsPerSec.toLocaleString()} ops/sec
+                        Observed throughput: {benchOpsPerSec !== null ? `${benchOpsPerSec.toLocaleString()} ops/sec` : 'Measuring...'}
                       </div>
                     </div>
                   )}
@@ -1533,10 +895,10 @@ npm run dev`}
                 <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] p-6 space-y-4">
                   <h2 className="title-2 text-[var(--text-primary)]">Configuring Gemini API key</h2>
                   <p className="body-5 text-[var(--text-tertiary)]">
-                    Optional: supply your Gemini API key inside .env.local to enable real time model responses.
+                    Optional: supply your Gemini API key inside .env.local (for local development via vercel dev) or Vercel environment variables to enable serverless proxy model responses.
                   </p>
                   <pre className="bg-[var(--surface-base)] p-4 rounded-xl border border-[var(--border-primary)] font-mono text-xs text-[var(--text-info)] overflow-x-auto">
-VITE_GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
                   </pre>
                 </div>
               </motion.div>
@@ -1887,19 +1249,22 @@ VITE_GEMINI_API_KEY=your_gemini_api_key_here
                 <WifiSlash className="w-3.5 h-3.5" /> Offline mode
               </span>
             )}
+            <span className="caption-5 font-mono text-[var(--text-subtle)] hidden sm:inline">
+              Local only, sync backend not connected
+            </span>
           </div>
 
           <div className="flex items-center gap-2">
             {queue.length > 0 && (
-              <span className="px-2 py-0.5 bg-[var(--surface-primary-subtle)] border border-[var(--border-primary)] text-[var(--text-warning)] rounded-full font-mono text-xs">
+              <span className="px-2 py-0.5 bg-[var(--surface-primary-subtle)] border border-[var(--border-primary)] text-[var(--text-warning)] rounded-full font-mono text-xs" title="Pending mutations in local IndexedDB sync queue">
                 {queue.length} in queue
               </span>
             )}
             <button
               onClick={triggerSyncQueue}
-              disabled={isSyncing || !isOnline}
+              disabled={isSyncing}
               className="p-1.5 rounded-lg hover:bg-[var(--surface-primary-subtle)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-30 transition cursor-pointer"
-              title="Force sync trigger"
+              title="Verify local queue state"
             >
               <ArrowClockwise className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-[var(--text-info)]' : ''}`} />
             </button>
@@ -2019,7 +1384,7 @@ VITE_GEMINI_API_KEY=your_gemini_api_key_here
                       <textarea
                         value={content}
                         onChange={(e) => handleAutoSave(title, e.target.value)}
-                        placeholder="Write markdown here... Writes persist to reactive local storage in 2.4ms."
+                        placeholder="Write markdown here... Writes persist directly to reactive IndexedDB storage."
                         className="flex-1 w-full bg-[var(--surface-primary)] border border-[var(--border-primary)] rounded-xl p-4 resize-none outline-none leading-relaxed text-[var(--text-primary)] placeholder-[var(--text-subtle)] font-mono text-xs custom-scroll focus:border-[var(--border-action-primary)] transition"
                       />
                     </div>
@@ -2031,7 +1396,7 @@ VITE_GEMINI_API_KEY=your_gemini_api_key_here
                         <Eye className="w-3 h-3 text-[var(--surface-accent)]" /> Live rendered preview
                       </div>
                       <div className="flex-1 h-full overflow-y-auto bg-[var(--surface-primary)] border border-[var(--border-primary)] rounded-xl p-5 custom-scroll text-xs leading-relaxed text-[var(--text-primary)]">
-                        <SimpleMarkdownRenderer content={content} />
+                        <MarkdownRenderer content={content} />
                       </div>
                     </div>
                   )}
@@ -2094,7 +1459,7 @@ VITE_GEMINI_API_KEY=your_gemini_api_key_here
                 <Cpu className="w-4 h-4 text-[var(--text-info)]" /> Consensus and conflict settlement model
               </h3>
               <p className="body-4 text-[var(--text-tertiary)]">
-                SyncMark adopts a client authoritative state synchronization algorithm. Every mutation captures a monotonic timestamp. When network re establishment occurs, client queues reconcile against cloud state.
+                SyncMark operates with client authority and a persistent FIFO queue in IndexedDB. Currently in local-first mode (sync backend not connected). In a connected multi-client setup, local queue entries reconcile with monotonic timestamps.
               </p>
               <div className="bg-[var(--surface-base)] p-4 rounded-xl border border-[var(--border-primary)] font-mono text-xs text-[var(--text-info)] space-y-1 overflow-x-auto">
                 <div>1. if (client.timestamp &gt; remote.timestamp) &#123; settle(REMOTE = client.payload) &#125;</div>
@@ -2183,8 +1548,14 @@ VITE_GEMINI_API_KEY=your_gemini_api_key_here
 
               <div className="flex flex-wrap gap-3 pt-2">
                 <button
-                  onClick={() => {
-                    setNotes(SHOWCASE_SEEDS);
+                  onClick={async () => {
+                    await db.notes.clear();
+                    await db.syncQueue.clear();
+                    await db.notes.bulkPut(SHOWCASE_SEEDS);
+                    setSelectedNoteId(SHOWCASE_SEEDS[0].id);
+                    currentSelectedIdRef.current = SHOWCASE_SEEDS[0].id;
+                    setTitle(SHOWCASE_SEEDS[0].title);
+                    setContent(SHOWCASE_SEEDS[0].content);
                     alert('Showcase documents seeded successfully!');
                   }}
                   className="py-2 px-3 bg-[var(--action-primary)] text-[var(--core-gray-00)] button-sm font-semibold rounded-lg hover:bg-[var(--action-primary-hover)] active:scale-[0.98] transition cursor-pointer"
@@ -2193,10 +1564,11 @@ VITE_GEMINI_API_KEY=your_gemini_api_key_here
                 </button>
 
                 <button
-                  onClick={() => {
-                    setNotes([]);
-                    setQueue([]);
+                  onClick={async () => {
+                    await db.notes.clear();
+                    await db.syncQueue.clear();
                     setSelectedNoteId('');
+                    currentSelectedIdRef.current = null;
                     setTitle('');
                     setContent('');
                   }}

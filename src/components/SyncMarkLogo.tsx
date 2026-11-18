@@ -1,0 +1,23 @@
+export function SyncMarkLogo({ size = 28 }: { size?: number }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 32 32"
+      fill="none"
+      style={{ width: size, height: size }}
+      className="shrink-0"
+    >
+      <rect width="32" height="32" rx="8" fill="#000000" />
+      <rect x="0.75" y="0.75" width="30.5" height="30.5" rx="7.25" stroke="#272727" strokeWidth="1.5" />
+      <path
+        d="M21 9H12.5C10.567 9 9 10.567 9 12.5C9 14.433 10.567 16 12.5 16H19.5C21.433 16 23 17.567 23 19.5C23 21.433 21.433 23 19.5 23H11"
+        stroke="#6366F1"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+      <circle cx="21.5" cy="9" r="2" fill="#06B6D4" />
+      <circle cx="10.5" cy="23" r="2" fill="#06B6D4" />
+    </svg>
+  );
+}
+

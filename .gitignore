@@ -5,6 +5,7 @@ dist-ssr
 
 # Environment Variables
 .env*
+!.env.example
 *.local
 
 # Logs
@@ -26,3 +27,6 @@ lerna-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+.vercel
+.env*
