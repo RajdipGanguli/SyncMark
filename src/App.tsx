@@ -416,9 +416,9 @@ function TaglineReveal() {
   );
 }
 
-function InteractiveHeroPreview({ onLaunchApp }: { onLaunchApp: () => void }) {
+function InteractiveHeroPreview({ onLaunchApp, measuredLatency = '—' }: { onLaunchApp: () => void; measuredLatency?: string }) {
   const [demoText, setDemoText] = useState(
-    "# Engineering notes\n\n- [x] Configure IndexedDB reactive layer\n- [ ] Benchmark local storage latency\n- [ ] Serialize offline mutation queue\n\nAll mutations commit locally in 2.4ms with zero blocking."
+    "# Engineering notes\n\n- [x] Configure IndexedDB reactive layer\n- [ ] Benchmark local storage latency\n- [ ] Serialize offline mutation queue\n\nAll mutations commit locally to IndexedDB with zero blocking."
   );
 
   return (
@@ -432,7 +432,9 @@ function InteractiveHeroPreview({ onLaunchApp }: { onLaunchApp: () => void }) {
             <span className="caption-3 font-mono ml-2 text-[var(--text-tertiary)]">interactive workspace preview</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="caption-3 font-mono text-[var(--text-success)] font-semibold">2.4ms client write latency</span>
+            <span className="caption-3 font-mono text-[var(--text-success)] font-semibold">
+              {measuredLatency !== '—' ? `${measuredLatency} client write latency` : 'IndexedDB local write'}
+            </span>
             <button
               onClick={onLaunchApp}
               className="caption-1 py-1 px-2.5 rounded-lg bg-[var(--surface-primary-subtle)] text-[var(--text-primary)] border border-[var(--border-primary)] hover:border-[var(--border-action-primary)] hover:text-[var(--text-info)] active:scale-[0.98] transition-colors flex items-center gap-1 cursor-pointer"
@@ -916,7 +918,7 @@ export default function App() {
                   {/* Concrete Proof Metric Badge */}
                   <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--surface-primary)] border border-[var(--border-primary)] text-[var(--text-info)] font-mono text-xs mb-6">
                     <span className="w-2 h-2 rounded-full bg-[var(--surface-success)] animate-pulse" />
-                    <span>2.4ms client write latency</span>
+                    <span>{measuredWriteMs !== null ? `${measuredWriteMs.toFixed(1)}ms measured write latency` : 'Zero latency local write'}</span>
                   </div>
 
                   {/* Heading with left to right text gradient */}
@@ -948,6 +950,7 @@ export default function App() {
                       setMainMode('app');
                       setStudioTab('editor');
                     }}
+                    measuredLatency={measuredWriteMs !== null ? `${measuredWriteMs.toFixed(1)}ms` : '—'}
                   />
                 </section>
 
@@ -969,7 +972,7 @@ export default function App() {
                       </div>
                       <h3 className="title-2 text-[var(--text-primary)]">Instant disk transactions</h3>
                       <p className="body-5 text-[var(--text-tertiary)]">
-                        Writes commit in 2.4ms directly to browser IndexedDB without waiting for round trip network confirmations.
+                        Writes commit directly to browser IndexedDB without waiting for round trip network confirmations.
                       </p>
                     </div>
 
@@ -1027,7 +1030,7 @@ export default function App() {
                       </div>
                       <h3 className="title-1 text-[var(--text-primary)]">Local transactional write</h3>
                       <p className="body-5 text-[var(--text-tertiary)]">
-                        Keystrokes commit atomically to browser IndexedDB in under 3ms with synchronous reactive state updates.
+                        Keystrokes commit atomically to browser IndexedDB with synchronous reactive state updates.
                       </p>
                     </div>
 
@@ -1038,7 +1041,7 @@ export default function App() {
                       </div>
                       <h3 className="title-1 text-[var(--text-primary)]">Offline FIFO queue buffering</h3>
                       <p className="body-5 text-[var(--text-tertiary)]">
-                        Network dropouts redirect mutations into an append only persistent queue with cryptographic record checksums.
+                        Network dropouts redirect mutations into a persistent FIFO IndexedDB queue with deduplicated keys.
                       </p>
                     </div>
 
@@ -1080,8 +1083,10 @@ export default function App() {
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="rounded-xl bg-[var(--surface-base)] border border-[var(--border-primary)] p-4 text-center">
-                        <div className="font-mono text-2xl md:text-3xl font-semibold text-[var(--text-success)] mb-1">2.4ms</div>
-                        <div className="caption-4 text-[var(--text-tertiary)]">Median client write latency</div>
+                        <div className="font-mono text-2xl md:text-3xl font-semibold text-[var(--text-success)] mb-1">
+                          {measuredWriteMs !== null ? `${measuredWriteMs.toFixed(1)}ms` : '—'}
+                        </div>
+                        <div className="caption-4 text-[var(--text-tertiary)]">Measured client write latency</div>
                       </div>
 
                       <div className="rounded-xl bg-[var(--surface-base)] border border-[var(--border-primary)] p-4 text-center">
@@ -1285,29 +1290,31 @@ function reconcileRecord(localRecord, remoteRecord) {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] p-6 space-y-2">
                     <div className="caption-4 text-[var(--text-tertiary)]">SyncMark IndexedDB</div>
-                    <div className="font-mono text-3xl font-semibold text-[var(--text-success)]">2.4ms</div>
-                    <div className="caption-5 text-[var(--text-subtle)]">Non blocking local write</div>
+                    <div className="font-mono text-3xl font-semibold text-[var(--text-success)]">
+                      {measuredWriteMs !== null ? `${measuredWriteMs.toFixed(1)}ms` : '—'}
+                    </div>
+                    <div className="caption-5 text-[var(--text-subtle)]">Measured non blocking write</div>
                   </div>
 
                   <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] p-6 space-y-2">
                     <div className="caption-4 text-[var(--text-tertiary)]">Standard Cloud REST API</div>
-                    <div className="font-mono text-3xl font-semibold text-[var(--text-warning)]">142ms</div>
-                    <div className="caption-5 text-[var(--text-subtle)]">Network round trip latency</div>
+                    <div className="font-mono text-3xl font-semibold text-[var(--text-warning)]">~100–200ms+</div>
+                    <div className="caption-5 text-[var(--text-subtle)]">Network round trip latency (typical)</div>
                   </div>
 
                   <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] p-6 space-y-2">
                     <div className="caption-4 text-[var(--text-tertiary)]">Cloud GraphQL Endpoint</div>
-                    <div className="font-mono text-3xl font-semibold text-[var(--core-red-400)]">218ms</div>
-                    <div className="caption-5 text-[var(--text-subtle)]">Server processing latency</div>
+                    <div className="font-mono text-3xl font-semibold text-[var(--core-red-400)]">~150–300ms+</div>
+                    <div className="caption-5 text-[var(--text-subtle)]">Server processing latency (typical)</div>
                   </div>
                 </div>
 
                 <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] p-6 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
-                      <h2 className="title-1 text-[var(--text-primary)]">Simulated write throughput test</h2>
+                      <h2 className="title-1 text-[var(--text-primary)]">Real Dexie write throughput benchmark</h2>
                       <p className="body-5 text-[var(--text-tertiary)]">
-                        Dispatches synthetic batch records to evaluate browser memory stability.
+                        Executes real IndexedDB transactions with automatic cleanup to evaluate browser disk write throughput.
                       </p>
                     </div>
 
@@ -1862,7 +1869,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
                       <textarea
                         value={content}
                         onChange={(e) => handleAutoSave(title, e.target.value)}
-                        placeholder="Write markdown here... Writes persist to reactive local storage in 2.4ms."
+                        placeholder="Write markdown here... Writes persist directly to reactive IndexedDB storage."
                         className="flex-1 w-full bg-[var(--surface-primary)] border border-[var(--border-primary)] rounded-xl p-4 resize-none outline-none leading-relaxed text-[var(--text-primary)] placeholder-[var(--text-subtle)] font-mono text-xs custom-scroll focus:border-[var(--border-action-primary)] transition"
                       />
                     </div>
