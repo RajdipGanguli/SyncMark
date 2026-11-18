@@ -1737,19 +1737,22 @@ GEMINI_API_KEY=your_gemini_api_key_here
                 <WifiSlash className="w-3.5 h-3.5" /> Offline mode
               </span>
             )}
+            <span className="caption-5 font-mono text-[var(--text-subtle)] hidden sm:inline">
+              Local only, sync backend not connected
+            </span>
           </div>
 
           <div className="flex items-center gap-2">
             {queue.length > 0 && (
-              <span className="px-2 py-0.5 bg-[var(--surface-primary-subtle)] border border-[var(--border-primary)] text-[var(--text-warning)] rounded-full font-mono text-xs">
+              <span className="px-2 py-0.5 bg-[var(--surface-primary-subtle)] border border-[var(--border-primary)] text-[var(--text-warning)] rounded-full font-mono text-xs" title="Pending mutations in local IndexedDB sync queue">
                 {queue.length} in queue
               </span>
             )}
             <button
               onClick={triggerSyncQueue}
-              disabled={isSyncing || !isOnline}
+              disabled={isSyncing}
               className="p-1.5 rounded-lg hover:bg-[var(--surface-primary-subtle)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-30 transition cursor-pointer"
-              title="Force sync trigger"
+              title="Verify local queue state"
             >
               <ArrowClockwise className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-[var(--text-info)]' : ''}`} />
             </button>
@@ -1944,7 +1947,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
                 <Cpu className="w-4 h-4 text-[var(--text-info)]" /> Consensus and conflict settlement model
               </h3>
               <p className="body-4 text-[var(--text-tertiary)]">
-                SyncMark adopts a client authoritative state synchronization algorithm. Every mutation captures a monotonic timestamp. When network re establishment occurs, client queues reconcile against cloud state.
+                SyncMark operates with client authority and a persistent FIFO queue in IndexedDB. Currently in local-first mode (sync backend not connected). In a connected multi-client setup, local queue entries reconcile with monotonic timestamps.
               </p>
               <div className="bg-[var(--surface-base)] p-4 rounded-xl border border-[var(--border-primary)] font-mono text-xs text-[var(--text-info)] space-y-1 overflow-x-auto">
                 <div>1. if (client.timestamp &gt; remote.timestamp) &#123; settle(REMOTE = client.payload) &#125;</div>
