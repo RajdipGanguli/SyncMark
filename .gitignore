@@ -5,6 +5,7 @@ dist-ssr
 
 # Environment Variables
 .env*
+!.env.example
 *.local
 
 # Logs

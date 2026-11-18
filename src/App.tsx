@@ -36,6 +36,7 @@ import {
 } from '@phosphor-icons/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { processNoteWithAI, type AIAction } from './services/aiService';
 
 export interface Note {
   id: string;
@@ -55,7 +56,6 @@ export interface SyncQueueItem {
   createdAt: number;
 }
 
-export type AIAction = 'summarize' | 'actionItems' | 'polish' | 'expand';
 export type ViewRoute = 'home' | 'features' | 'benchmarks' | 'docs' | 'privacy' | 'terms' | '404';
 export type StudioTab = 'editor' | 'telemetry' | 'playground' | 'settings';
 
@@ -145,61 +145,6 @@ function SyncMarkLogo({ size = 28 }: { size?: number }) {
       <circle cx="10.5" cy="23" r="2" fill="#06B6D4" />
     </svg>
   );
-}
-
-async function callAICopilot(text: string, action: AIAction): Promise<string> {
-  let apiKey = '';
-  try {
-    const envLookup = new Function('key', 'try { return import.meta.env[key]; } catch { return ""; }');
-    apiKey = envLookup('VITE_GEMINI_API_KEY') || '';
-  } catch {
-    apiKey = '';
-  }
-
-  const prompts: Record<AIAction, string> = {
-    summarize: 'Generate a structured 2 to 3 sentence executive summary of these notes with key takeaways:\n\n',
-    actionItems: 'Extract all tasks and action items from this text into a clean Markdown checklist format (`- [ ] task`):\n\n',
-    polish: 'Refine and polish the tone, grammar, and technical vocabulary of this text while preserving exact meaning:\n\n',
-    expand: 'Expand on the technical concepts described in this document, detailing edge cases, architectural patterns, and next steps:\n\n'
-  };
-
-  const fullPrompt = `${prompts[action]}${text}`;
-
-  if (apiKey && navigator.onLine) {
-    const candidateModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-    for (const model of candidateModels) {
-      try {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: [{ text: fullPrompt }] }] })
-        });
-        const data = await res.json();
-        if (res.ok && data.candidates?.[0]?.content?.parts?.[0]?.text) {
-          return data.candidates[0].content.parts[0].text;
-        }
-      } catch (err) {
-        console.warn(`[Copilot] Model ${model} request failed, continuing fallback...`, err);
-      }
-    }
-  }
-
-  // Deterministic local client fallback for offline or unauthenticated usage
-  await new Promise((r) => setTimeout(r, 400));
-  if (action === 'summarize') {
-    return `### Executive summary\n\n• Core focus: Local first architecture providing instant writes to IndexedDB with zero latency.\n• Consistency: Background FIFO queue guarantees deterministic last write wins reconciliation.\n• Resilience: Complete offline execution with service worker runtime interception.`;
-  }
-  if (action === 'actionItems') {
-    return `### Extracted action items\n\n- [ ] Verify IndexedDB transaction atomicity under memory pressure\n- [ ] Test offline FIFO queue serialization during network loss\n- [ ] Validate last write wins timestamp settlement across tabs\n- [ ] Audit Workbox cache storage quotas on mobile viewports`;
-  }
-  if (action === 'polish') {
-    return `### Polished technical formulation\n\n${text
-      .replace(/we need to/gi, 'The engineering objective requires')
-      .replace(/fix the/gi, 'reconcile critical')
-      .replace(/deploy the site/gi, 'orchestrate continuous deployment for the production bundle')}`;
-  }
-  return `### Technical expansion\n\n1. Storage tier: Local mutations commit to IndexedDB in 2.4ms with zero blocking.\n2. Monotonic clocks: Sequential millisecond timestamps guarantee deterministic ordering.\n3. Runtime footprint: Lightweight client memory usage under 8MB heap allocations.`;
 }
 
 function SimpleMarkdownRenderer({ content }: { content: string }) {
@@ -873,7 +818,7 @@ export default function App() {
     }
     setIsAiProcessing(true);
     try {
-      const result = await callAICopilot(content, action);
+      const result = await processNoteWithAI(content, action);
       const labels: Record<AIAction, string> = {
         summarize: 'Executive summary',
         actionItems: 'Actionable tasks',
@@ -1533,10 +1478,10 @@ npm run dev`}
                 <div className="rounded-2xl bg-[var(--surface-primary)] border border-[var(--border-primary)] p-6 space-y-4">
                   <h2 className="title-2 text-[var(--text-primary)]">Configuring Gemini API key</h2>
                   <p className="body-5 text-[var(--text-tertiary)]">
-                    Optional: supply your Gemini API key inside .env.local to enable real time model responses.
+                    Optional: supply your Gemini API key inside .env.local (for local development via vercel dev) or Vercel environment variables to enable serverless proxy model responses.
                   </p>
                   <pre className="bg-[var(--surface-base)] p-4 rounded-xl border border-[var(--border-primary)] font-mono text-xs text-[var(--text-info)] overflow-x-auto">
-VITE_GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
                   </pre>
                 </div>
               </motion.div>
