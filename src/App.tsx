@@ -36,93 +36,13 @@ import {
 } from '@phosphor-icons/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db, initDbMigration, type Note, type SyncQueueItem, SHOWCASE_SEEDS } from './db';
+import { syncEngine } from './services/syncEngine';
 import { processNoteWithAI, type AIAction } from './services/aiService';
-
-export interface Note {
-  id: string;
-  title: string;
-  content: string;
-  tags: string[];
-  updatedAt: number;
-  syncStatus: 'synced' | 'pending' | 'conflict';
-  deleted?: boolean;
-}
-
-export interface SyncQueueItem {
-  queueId?: number;
-  noteId: string;
-  action: 'UPSERT' | 'DELETE';
-  payload: Note;
-  createdAt: number;
-}
 
 export type ViewRoute = 'home' | 'features' | 'benchmarks' | 'docs' | 'privacy' | 'terms' | '404';
 export type StudioTab = 'editor' | 'telemetry' | 'playground' | 'settings';
-
-const SHOWCASE_SEEDS: Note[] = [
-  {
-    id: 'seed-architecture-spec',
-    title: 'SyncMark Distributed Architecture Spec',
-    tags: ['Architecture', 'PWA', 'Distributed Systems'],
-    updatedAt: Date.now() - 1000 * 60 * 30,
-    syncStatus: 'synced',
-    deleted: false,
-    content: `# SyncMark Architecture Specification
-
-SyncMark is an offline capable progressive web application utilizing a local first reactive storage layer combined with a background synchronization engine.
-
-### Core Highlights
-- Zero latency writes: All mutations commit directly to browser IndexedDB in under 3ms.
-- Resilient sync engine: Network partitions push modifications to a FIFO queue buffer.
-- Conflict settlement: Automatic last write wins deterministic timestamp resolution.
-- Model acceleration: Client context orchestration using Google GenAI models.
-
----
-
-### Synchronization Pipeline
-- [x] Client commits to non blocking local storage
-- [x] Background worker registers network lifecycle
-- [ ] Multi region WebSocket reconciliation
-- [x] Deterministic timestamp resolution without remote locks`
-  },
-  {
-    id: 'seed-sprint-checklist',
-    title: 'Engineering Sprint Checklist',
-    tags: ['Sprint', 'Tasks', 'Deliverables'],
-    updatedAt: Date.now() - 1000 * 60 * 120,
-    syncStatus: 'synced',
-    deleted: false,
-    content: `# Engineering Sprint Tasks
-
-Track primary engineering deliverables. Use the Copilot action items button to parse tasks into markdown format.
-
-- [x] Configure IndexedDB schemas for notes and syncQueue
-- [x] Implement Workbox Service Worker caching strategies
-- [ ] Add bi directional WebSocket syncing for collaborative workflows
-- [ ] Implement CRDT delta reconciliation for character level edits
-- [x] Integrate Gemini copilot for document summarization
-- [ ] Benchmark Lighthouse PWA metrics on throttled networks`
-  },
-  {
-    id: 'seed-frontend-guide',
-    title: 'Frontend Performance Optimization Guide',
-    tags: ['Frontend', 'Performance', 'React 19'],
-    updatedAt: Date.now() - 1000 * 60 * 360,
-    syncStatus: 'synced',
-    deleted: false,
-    content: `# Frontend Optimization Guide
-
-### Core Web Vitals Targets
-- Largest Contentful Paint: under 2.5s
-- Interaction to Next Paint: under 200ms
-- Cumulative Layout Shift: under 0.1
-
-### Key Engineering Decisions
-- [x] Hardware accelerated backdrops without blur penalties
-- [x] Responsive vector SVG logo integration
-- [x] Progressive web app offline caching with Workbox runtime interceptors`
-  }
-];
 
 function SyncMarkLogo({ size = 28 }: { size?: number }) {
   return (
@@ -629,29 +549,24 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(0);
 
-  // Benchmarks simulation state
+  // Benchmarks & metrics state
   const [benchRunning, setBenchRunning] = useState(false);
   const [benchProgress, setBenchProgress] = useState(0);
-  const [benchOpsPerSec, setBenchOpsPerSec] = useState(24500);
+  const [benchOpsPerSec, setBenchOpsPerSec] = useState<number | null>(null);
+  const [measuredWriteMs, setMeasuredWriteMs] = useState<number | null>(() => syncEngine.medianWriteMs());
 
-  // Storage and document states
-  const [notes, setNotes] = useState<Note[]>(() => {
-    try {
-      const saved = localStorage.getItem('syncmark_notes');
-      return saved ? JSON.parse(saved) : SHOWCASE_SEEDS;
-    } catch {
-      return SHOWCASE_SEEDS;
-    }
-  });
+  // Dexie live queries (replaces localStorage)
+  const rawNotes = useLiveQuery(
+    () => db.notes.orderBy('updatedAt').reverse().filter((n) => !n.deleted).toArray(),
+    []
+  );
+  const notes = rawNotes ?? [];
 
-  const [queue, setQueue] = useState<SyncQueueItem[]>(() => {
-    try {
-      const saved = localStorage.getItem('syncmark_queue');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const rawQueue = useLiveQuery(
+    () => db.syncQueue.orderBy('createdAt').toArray(),
+    []
+  );
+  const queue = rawQueue ?? [];
 
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -665,26 +580,21 @@ export default function App() {
   const [aiResultModal, setAiResultModal] = useState<{ title: string; body: string } | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
 
+  // One-time database migration from localStorage / seed documents
   useEffect(() => {
-    try {
-      localStorage.setItem('syncmark_notes', JSON.stringify(notes));
-    } catch (err) {
-      console.warn('Storage persistence warning:', err);
-    }
-  }, [notes]);
+    initDbMigration();
+  }, []);
 
+  // Subscribe to sync engine syncing state
   useEffect(() => {
-    try {
-      localStorage.setItem('syncmark_queue', JSON.stringify(queue));
-    } catch (err) {
-      console.warn('Queue persistence warning:', err);
-    }
-  }, [queue]);
+    return syncEngine.subscribe(setIsSyncing);
+  }, []);
 
+  // Online / offline lifecycle
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      triggerSyncQueue();
+      syncEngine.sync();
     };
     const handleOffline = () => setIsOnline(false);
 
@@ -698,106 +608,95 @@ export default function App() {
   }, []);
 
   const activeNote = useMemo(() => notes.find((n) => n.id === selectedNoteId), [notes, selectedNoteId]);
+  const activeNoteId = activeNote?.id;
+  const currentSelectedIdRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Synchronize title/content into editor only when switching active notes (prevents cursor jump)
   useEffect(() => {
-    if (activeNote) {
+    if (activeNote && activeNote.id !== currentSelectedIdRef.current) {
+      currentSelectedIdRef.current = activeNote.id;
       setTitle(activeNote.title);
       setContent(activeNote.content);
     } else if (notes.length > 0 && !selectedNoteId) {
       setSelectedNoteId(notes[0].id);
     }
-  }, [selectedNoteId, activeNote, notes]);
+  }, [selectedNoteId, activeNoteId, notes.length]);
 
-  const triggerSyncQueue = async () => {
-    if (!navigator.onLine || isSyncing) return;
-    setIsSyncing(true);
-
-    await new Promise((r) => setTimeout(r, 400));
-
-    setNotes((prevNotes) =>
-      prevNotes.map((note) => (note.syncStatus === 'pending' ? { ...note, syncStatus: 'synced' } : note))
-    );
-    setQueue([]);
-    setIsSyncing(false);
-  };
-
-  const handleCreateNew = () => {
-    const newNote: Note = {
-      id: crypto.randomUUID(),
-      title: 'Untitled document',
-      content: '# New note\n\nStart writing in zero latency local markdown...',
-      tags: ['General'],
-      updatedAt: Date.now(),
-      syncStatus: isOnline ? 'synced' : 'pending',
-      deleted: false
+  // Clean up debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
+  }, []);
 
-    setNotes([newNote, ...notes]);
-    setSelectedNoteId(newNote.id);
-    if (!isOnline) {
-      setQueue((prev) => [...prev, { noteId: newNote.id, action: 'UPSERT', payload: newNote, createdAt: Date.now() }]);
-    }
-    setMainMode('app');
-    setStudioTab('editor');
-  };
-
+  // Debounced auto-save directly to Dexie + SyncQueue (250ms)
   const handleAutoSave = (newTitle: string, newContent: string) => {
     setTitle(newTitle);
     setContent(newContent);
 
-    setNotes((prevNotes) =>
-      prevNotes.map((n) => {
-        if (n.id === selectedNoteId) {
-          return {
-            ...n,
-            title: newTitle || 'Untitled document',
-            content: newContent,
-            updatedAt: Date.now(),
-            syncStatus: isOnline ? 'synced' : 'pending'
-          };
-        }
-        return n;
-      })
-    );
+    if (!activeNote) return;
 
-    if (!isOnline && activeNote) {
-      setQueue((prev) => [
-        ...prev,
-        {
-          noteId: selectedNoteId,
-          action: 'UPSERT',
-          payload: { ...activeNote, title: newTitle, content: newContent, updatedAt: Date.now() },
-          createdAt: Date.now()
-        }
-      ]);
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
     }
+
+    saveTimerRef.current = setTimeout(async () => {
+      await syncEngine.saveNoteLocally({
+        ...activeNote,
+        title: newTitle || 'Untitled document',
+        content: newContent,
+      });
+      setMeasuredWriteMs(syncEngine.medianWriteMs());
+    }, 250);
   };
 
-  const handleDeleteNote = (noteId: string) => {
-    setNotes((prev) => prev.filter((n) => n.id !== noteId));
+  const handleCreateNew = async () => {
+    const newNote = await syncEngine.createNote();
+    currentSelectedIdRef.current = newNote.id;
+    setSelectedNoteId(newNote.id);
+    setTitle(newNote.title);
+    setContent(newNote.content);
+    setMainMode('app');
+    setStudioTab('editor');
+    setMeasuredWriteMs(syncEngine.medianWriteMs());
+  };
+
+  const handleDeleteNote = async (noteId: string) => {
+    await syncEngine.deleteNoteLocally(noteId);
+    setMeasuredWriteMs(syncEngine.medianWriteMs());
     if (selectedNoteId === noteId) {
       const remaining = notes.filter((n) => n.id !== noteId);
       if (remaining.length > 0) {
         setSelectedNoteId(remaining[0].id);
+        currentSelectedIdRef.current = remaining[0].id;
+        setTitle(remaining[0].title);
+        setContent(remaining[0].content);
       } else {
         setSelectedNoteId('');
+        currentSelectedIdRef.current = null;
         setTitle('');
         setContent('');
       }
     }
   };
 
-  const handleDuplicateNote = () => {
+  const handleDuplicateNote = async () => {
     if (!activeNote) return;
-    const duplicated: Note = {
+    const duplicated = await syncEngine.duplicateNote({
       ...activeNote,
-      id: crypto.randomUUID(),
-      title: `${activeNote.title} Copy`,
-      updatedAt: Date.now(),
-      syncStatus: isOnline ? 'synced' : 'pending'
-    };
-    setNotes([duplicated, ...notes]);
+      title,
+      content,
+    });
+    currentSelectedIdRef.current = duplicated.id;
     setSelectedNoteId(duplicated.id);
+    setTitle(duplicated.title);
+    setContent(duplicated.content);
+    setMeasuredWriteMs(syncEngine.medianWriteMs());
+  };
+
+  const triggerSyncQueue = () => {
+    syncEngine.sync();
   };
 
   const handleDownloadMarkdown = () => {
@@ -857,23 +756,22 @@ export default function App() {
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
   const readingTime = Math.ceil(wordCount / 200);
 
-  // Stress lab simulation runner
-  const runStressTest = () => {
+  // Real Dexie stress lab benchmark runner
+  const runStressTest = async () => {
     if (benchRunning) return;
     setBenchRunning(true);
     setBenchProgress(0);
-
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += 10;
-      setBenchProgress(progress);
-      setBenchOpsPerSec((prev) => prev + Math.floor(Math.random() * 800 - 350));
-
-      if (progress >= 100) {
-        clearInterval(interval);
-        setBenchRunning(false);
-      }
-    }, 180);
+    try {
+      const result = await syncEngine.runRealBenchmark(200, (p) => {
+        setBenchProgress(p);
+      });
+      setBenchOpsPerSec(result.opsPerSec);
+      setMeasuredWriteMs(syncEngine.medianWriteMs());
+    } catch (err) {
+      console.error('Benchmark execution error:', err);
+    } finally {
+      setBenchRunning(false);
+    }
   };
 
   // ==========================================
@@ -1435,7 +1333,7 @@ function reconcileRecord(localRecord, remoteRecord) {
                         />
                       </div>
                       <div className="caption-3 font-mono text-[var(--text-success)] font-semibold">
-                        Observed throughput: {benchOpsPerSec.toLocaleString()} ops/sec
+                        Observed throughput: {benchOpsPerSec !== null ? `${benchOpsPerSec.toLocaleString()} ops/sec` : 'Measuring...'}
                       </div>
                     </div>
                   )}
@@ -2128,8 +2026,14 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
               <div className="flex flex-wrap gap-3 pt-2">
                 <button
-                  onClick={() => {
-                    setNotes(SHOWCASE_SEEDS);
+                  onClick={async () => {
+                    await db.notes.clear();
+                    await db.syncQueue.clear();
+                    await db.notes.bulkPut(SHOWCASE_SEEDS);
+                    setSelectedNoteId(SHOWCASE_SEEDS[0].id);
+                    currentSelectedIdRef.current = SHOWCASE_SEEDS[0].id;
+                    setTitle(SHOWCASE_SEEDS[0].title);
+                    setContent(SHOWCASE_SEEDS[0].content);
                     alert('Showcase documents seeded successfully!');
                   }}
                   className="py-2 px-3 bg-[var(--action-primary)] text-[var(--core-gray-00)] button-sm font-semibold rounded-lg hover:bg-[var(--action-primary-hover)] active:scale-[0.98] transition cursor-pointer"
@@ -2138,10 +2042,11 @@ GEMINI_API_KEY=your_gemini_api_key_here
                 </button>
 
                 <button
-                  onClick={() => {
-                    setNotes([]);
-                    setQueue([]);
+                  onClick={async () => {
+                    await db.notes.clear();
+                    await db.syncQueue.clear();
                     setSelectedNoteId('');
+                    currentSelectedIdRef.current = null;
                     setTitle('');
                     setContent('');
                   }}
