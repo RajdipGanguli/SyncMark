@@ -1,0 +1,343 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Geist Mono', monospace;
+}
+
+:root {
+  /* Layer 1: Core Colors */
+  --core-primary-350: #A5B4FC;
+  --core-primary-400: #818CF8;
+  --core-primary-500: #6366F1;
+  --core-primary-600: #4F46E5;
+  --core-primary-700: #4338CA;
+
+  --core-accent-200: #A5F3FC;
+  --core-accent-500: #06B6D4;
+
+  --core-green-400: #34D399;
+  --core-green-500: #10B981;
+  --core-green-600: #059669;
+
+  --core-yellow-300: #FCD34D;
+  --core-yellow-500: #F59E0B;
+
+  --core-red-400: #F87171;
+  --core-red-500: #EF4444;
+  --core-red-700: #B91C1C;
+
+  --core-gray-00: #FFFFFF;
+  --core-gray-50: #FAFAFA;
+  --core-gray-200: #E4E4E7;
+  --core-gray-400: #A1A1AA;
+  --core-gray-500: #71717A;
+  --core-gray-600: #52525B;
+  --core-gray-700: #3F3F46;
+  --core-gray-750: #313131;
+  --core-gray-800: #272727;
+  --core-gray-850: #1F1F1F;
+  --core-gray-870: #181818;
+  --core-gray-1000: #000000;
+
+  --core-gray-alpha-700-16: rgba(63, 63, 70, 0.16);
+  --core-gray-alpha-700-24: rgba(63, 63, 70, 0.24);
+  --core-gray-alpha-700-40: rgba(63, 63, 70, 0.40);
+  --core-gray-alpha-700-64: rgba(63, 63, 70, 0.64);
+  --core-gray-alpha-700-80: rgba(63, 63, 70, 0.80);
+
+  /* Layer 2: Color System (Semantic Tokens) - Default Dark Mode */
+  --surface-base: var(--core-gray-1000);
+  --surface-primary: var(--core-gray-870);
+  --surface-primary-subtle: var(--core-gray-850);
+  --surface-primary-hover: var(--core-gray-800);
+  --surface-secondary: var(--core-gray-800);
+  --surface-secondary-subtle: var(--core-gray-750);
+  --surface-accent: var(--core-accent-500);
+  --surface-info: var(--core-primary-400);
+  --surface-success: var(--core-green-500);
+
+  --action-primary: var(--core-primary-500);
+  --action-primary-hover: var(--core-primary-700);
+  --action-primary-click: var(--core-primary-600);
+
+  --action-secondary: var(--core-gray-600);
+  --action-secondary-hover: var(--core-gray-750);
+  --action-secondary-click: var(--core-gray-700);
+
+  --border-primary: var(--core-gray-750);
+  --border-primary-light: var(--core-gray-700);
+  --border-action-primary: var(--core-primary-400);
+  --border-success: var(--core-green-400);
+
+  --text-primary: var(--core-gray-50);
+  --text-secondary: var(--core-gray-200);
+  --text-tertiary: var(--core-gray-400);
+  --text-subtle: var(--core-gray-500);
+  --text-info: var(--core-primary-350);
+  --text-success: var(--core-green-400);
+  --text-warning: var(--core-yellow-500);
+
+  --icon-default: var(--core-gray-50);
+  --icon-secondary: var(--core-gray-200);
+  --icon-info: var(--core-primary-350);
+  --icon-success: var(--core-green-400);
+
+  --overlay-md: var(--core-gray-alpha-700-40);
+  --overlay-lg: var(--core-gray-alpha-700-64);
+  --overlay-xlg: var(--core-gray-alpha-700-80);
+}
+
+.light {
+  /* Layer 2: Light Mode Aliases */
+  --surface-base: var(--core-gray-50);
+  --surface-primary: var(--core-gray-00);
+  --surface-primary-subtle: var(--core-gray-50);
+  --surface-primary-hover: var(--core-gray-200);
+  --surface-secondary: var(--core-gray-200);
+  --surface-secondary-subtle: var(--core-gray-400);
+  --surface-accent: var(--core-accent-500);
+  --surface-info: var(--core-primary-500);
+  --surface-success: var(--core-green-600);
+
+  --action-primary: var(--core-primary-500);
+  --action-primary-hover: var(--core-primary-600);
+  --action-primary-click: var(--core-primary-700);
+
+  --action-secondary: var(--core-gray-200);
+  --action-secondary-hover: var(--core-gray-400);
+  --action-secondary-click: var(--core-gray-500);
+
+  --border-primary: var(--core-gray-200);
+  --border-primary-light: var(--core-gray-400);
+  --border-action-primary: var(--core-primary-500);
+  --border-success: var(--core-green-500);
+
+  --text-primary: var(--core-gray-1000);
+  --text-secondary: var(--core-gray-700);
+  --text-tertiary: var(--core-gray-600);
+  --text-subtle: var(--core-gray-500);
+  --text-info: var(--core-primary-600);
+  --text-success: var(--core-green-600);
+  --text-warning: var(--core-yellow-500);
+
+  --icon-default: var(--core-gray-1000);
+  --icon-secondary: var(--core-gray-700);
+  --icon-info: var(--core-primary-600);
+  --icon-success: var(--core-green-600);
+
+  --overlay-md: rgba(0, 0, 0, 0.40);
+  --overlay-lg: rgba(0, 0, 0, 0.64);
+  --overlay-xlg: rgba(0, 0, 0, 0.80);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--surface-base);
+  color: var(--text-primary);
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* Named text styles matching strict design specification */
+.heading-1 {
+  font-size: 3.75rem;
+  line-height: 1;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.heading-2 {
+  font-size: 3rem;
+  line-height: 1;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.heading-3 {
+  font-size: 2.25rem;
+  line-height: 2.5rem;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.heading-4 {
+  font-size: 1.875rem;
+  line-height: 2.25rem;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.heading-5 {
+  font-size: 1.5rem;
+  line-height: 2rem;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.heading-6 {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.title-1 {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+  font-weight: 500;
+  text-wrap: balance;
+}
+
+.title-2 {
+  font-size: 1rem;
+  line-height: 1.5rem;
+  font-weight: 500;
+  text-wrap: balance;
+}
+
+.title-3 {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 500;
+  text-wrap: balance;
+}
+
+.title-4 {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+}
+
+.title-5 {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+}
+
+.body-1 {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+  font-weight: 400;
+  text-wrap: pretty;
+}
+
+.body-2 {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+  font-weight: 400;
+  text-wrap: pretty;
+}
+
+.body-3 {
+  font-size: 1rem;
+  line-height: 1.5rem;
+  font-weight: 400;
+  text-wrap: pretty;
+}
+
+.body-4 {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 400;
+  text-wrap: pretty;
+}
+
+.body-5 {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 400;
+  text-wrap: pretty;
+}
+
+.body-6 {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 400;
+  color: var(--text-subtle);
+  text-wrap: pretty;
+}
+
+.button-lg {
+  font-size: 1rem;
+  line-height: 1.5rem;
+  font-weight: 600;
+}
+
+.button-md {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
+}
+
+.button-sm {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 600;
+}
+
+.button-xsm {
+  font-size: 0.75rem;
+  line-height: 1;
+  font-weight: 600;
+}
+
+.caption-1 {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+}
+
+.caption-2 {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 400;
+}
+
+.caption-3 {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.caption-4 {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+.caption-5 {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 400;
+  color: var(--text-subtle);
+}
+
+/* Custom Minimalist Scrollbars */
+.custom-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scroll::-webkit-scrollbar-track {
+  background: var(--surface-primary);
+}
+
+.custom-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-primary);
+  border-radius: 9999px;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--surface-secondary-subtle);
+}
+
+/* Visible outside focus ring */
+:focus-visible {
+  outline: 2px solid var(--border-action-primary);
+  outline-offset: 2px;
+}
