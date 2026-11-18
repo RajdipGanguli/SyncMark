@@ -93,3 +93,4 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     return res.status(500).json({ error: error?.message || 'Internal server error while contacting Gemini API.' });
   }
 }
+

@@ -20,3 +20,4 @@ export function SyncMarkLogo({ size = 28 }: { size?: number }) {
     </svg>
   );
 }
+
