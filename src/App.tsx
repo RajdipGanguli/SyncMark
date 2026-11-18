@@ -1,8 +1,41 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import {
- 
+  ArrowClockwise,
+  ArrowLeft,
+  ArrowUpRight,
+  CaretDown,
+  CaretRight,
+  Check,
+  CheckCircle,
+  Clock,
+  Copy,
+  Cpu,
+  Database,
+  DownloadSimple,
+  Eye,
+  FolderOpen,
+  Gear,
+  GitFork,
+  HardDrive,
+  Lightning,
+  List,
+  ListChecks,
+  MagicWand,
+  MagnifyingGlass,
+  PencilSimple,
+  Plus,
+  Pulse,
+  Robot,
+  ShareNetwork,
+  ShieldCheck,
+  Sparkle,
+  Stack,
+  Trash,
+  WifiHigh,
+  WifiSlash,
+  X
 } from '@phosphor-icons/react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 export interface Note {
   id: string;
