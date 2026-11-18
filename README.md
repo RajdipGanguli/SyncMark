@@ -30,29 +30,14 @@ SyncMark is a local first markdown workspace designed for developers and technic
 
 ```bash
 # Clone the repository
-git clone https://github.com/RajdipGanguli/SyncMark.git
-cd syncmark
+git clone [https://github.com/RajdipGanguli/SyncMark.git](https://github.com/RajdipGanguli/SyncMark.git)
+cd SyncMark
 
 # Install dependencies
-npm install
+npm install --legacy-peer-deps
 
 # Start development server
 npm run dev
 
 # Build production bundle
 npm run build
-```
-
-### Environment Configuration
-
-Create a `.env.local` file in the root directory:
-
-```env
-VITE_GEMINI_API_KEY=your_gemini_api_key
-```
-
-If an API key is not supplied, SyncMark falls back to deterministic client side heuristic processors for document summarization and task extraction.
-
-## Author
-
-Engineered by [Rajdip Ganguli](https://github.com/RajdipGanguli).
