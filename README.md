@@ -30,7 +30,7 @@ SyncMark is a local first markdown workspace designed for developers and technic
 
 ```bash
 # Clone the repository
-git clone [https://github.com/RajdipGanguli/SyncMark.git](https://github.com/RajdipGanguli/SyncMark.git)
+git clone https://github.com/RajdipGanguli/SyncMark.git
 cd SyncMark
 
 # Install dependencies
